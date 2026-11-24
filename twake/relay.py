@@ -4,7 +4,7 @@ import logging
 import time
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from kombu import Connection, Exchange
@@ -89,6 +89,8 @@ class Relay:
             except Exception:
                 logger.exception("outbox relay: publication failed, retrying")
                 self.close()
+                # A broken database connection is not reused by Django
+                connection.close()
                 n = 0
             if n < BATCH:
                 time.sleep(interval)
