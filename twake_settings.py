@@ -68,3 +68,17 @@ class Production(TwakeMixin, impress.Production):
 
 class Test(TwakeMixin, impress.Test):
     """Test settings with the twake app."""
+
+
+class Devbox(Production):
+    """Production settings on a plain http stack: nothing is redirected to https
+    and the cookies are not marked secure. For a development stack only."""
+
+    SECURE_SSL_REDIRECT = False
+    SECURE_HSTS_SECONDS = 0
+    SECURE_HSTS_PRELOAD = False
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = False
+    SECURE_PROXY_SSL_HEADER = None
+    CSRF_COOKIE_SECURE = False
+    SESSION_COOKIE_SECURE = False
+    CONVERSION_API_SECURE = False

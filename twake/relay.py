@@ -72,7 +72,7 @@ class Relay:
                     routing_key=row.type,
                     message_id=str(row.id),
                     delivery_mode=2,
-                    content_type="application/json",
+                    serializer="json",
                     declare=[self.exchange],
                     retry=False,
                 )

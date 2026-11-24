@@ -39,6 +39,7 @@ def test_publish_pending_in_order_and_mark_sent():
     assert [c.kwargs["routing_key"] for c in calls] == ["t.first", "t.second"]
     assert [c.kwargs["message_id"] for c in calls] == [str(first.id), str(second.id)]
     assert calls[0].kwargs["delivery_mode"] == 2
+    assert calls[0].kwargs["serializer"] == "json"
     assert not Outbox.objects.filter(sent_at__isnull=True).exists()
     assert relay.publish_pending() == 0
     assert producer.publish.call_count == 2
