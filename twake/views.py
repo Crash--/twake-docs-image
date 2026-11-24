@@ -144,6 +144,20 @@ def share_by_email(request, document_id):
     )
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def managed_access_ids(request, document_id):
+    """The accesses the grants of a document posed, without a direct role: the
+    share dialog shows the group or the drive, not one line per member."""
+    document = document_or_404(document_id)
+    if document.get_role(request.user) is None and document.link_reach == "restricted":
+        raise exceptions.PermissionDenied()
+    ids = ManagedAccess.objects.filter(
+        access__document=document, previous_role=""
+    ).values_list("access_id", flat=True)
+    return Response({"access_ids": [str(i) for i in ids]})
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def grants(request, document_id):

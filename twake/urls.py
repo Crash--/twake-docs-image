@@ -19,6 +19,11 @@ urlpatterns = [
         name="twake-share-by-email",
     ),
     path(
+        f"{API}documents/<uuid:document_id>/accesses/managed/",
+        views.managed_access_ids,
+        name="twake-managed-access-ids",
+    ),
+    path(
         f"{API}documents/<uuid:document_id>/grants/",
         views.grants,
         name="twake-grants",

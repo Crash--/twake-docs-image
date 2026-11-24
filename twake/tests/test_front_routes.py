@@ -185,6 +185,20 @@ def test_share_by_email(alice, bob, session_client, settings):
     )
 
 
+def test_managed_access_ids_for_the_dialog(alice, bob, session_client):
+    """The dialog hides the accesses a grant posed; one with a direct role stays."""
+    doc = factories.DocumentFactory(users=[(alice, "owner")], link_reach="restricted")
+    managed = models.DocumentAccess.objects.create(document=doc, user=bob, role="reader")
+    ManagedAccess.objects.create(access=managed, previous_role="")
+    erin = factories.UserFactory(sub="erin", email="erin@example.com")
+    direct = models.DocumentAccess.objects.create(document=doc, user=erin, role="editor")
+    ManagedAccess.objects.create(access=direct, previous_role="editor")
+
+    response = session_client.get(f"{API}documents/{doc.pk}/accesses/managed/")
+    assert response.status_code == 200
+    assert response.json() == {"access_ids": [str(managed.pk)]}
+
+
 def test_share_by_email_makes_a_managed_access_direct(alice, bob, session_client):
     """An access a grant posed, given again by hand, is direct from now on: the
     grant going away does not take it back (stories G4, S7)."""
