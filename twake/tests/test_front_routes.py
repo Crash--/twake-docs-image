@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 from core import factories, models
 
 from twake import events
-from twake.models import Grant
+from twake.models import Grant, ManagedAccess
 from twake.oidc import WORKPLACE_FQDN_SESSION_KEY
 
 from .conftest import outbox
@@ -183,3 +183,20 @@ def test_share_by_email(alice, bob, session_client, settings):
         ).status_code
         == 403
     )
+
+
+def test_share_by_email_makes_a_managed_access_direct(alice, bob, session_client):
+    """An access a grant posed, given again by hand, is direct from now on: the
+    grant going away does not take it back (stories G4, S7)."""
+    doc = factories.DocumentFactory(users=[(alice, "owner")], link_reach="restricted")
+    access = models.DocumentAccess.objects.create(document=doc, user=bob, role="reader")
+    ManagedAccess.objects.create(access=access, previous_role="")
+
+    response = session_client.post(
+        f"{API}documents/{doc.pk}/accesses/",
+        {"email": "bob@example.com", "role": "editor"},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert not ManagedAccess.objects.filter(access=access).exists()
+    assert models.DocumentAccess.objects.get(pk=access.pk).role == "editor"

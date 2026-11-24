@@ -115,12 +115,14 @@ def share_by_email(request, document_id):
                 user.language or request.user.language or settings.LANGUAGE_CODE,
             )
             created = True
-        elif access.role != role:
-            # The same person again: one line, the new role (story P13)
-            access.role = role
-            access.save(update_fields=["role", "updated_at"])
-            created = False
         else:
+            # The same person again: one line, the new role (story P13). Given
+            # by hand, the access is direct from now on, whatever the grants
+            # that posed it (stories G4, S7).
+            ManagedAccess.objects.filter(access=access).delete()
+            if access.role != role:
+                access.role = role
+                access.save(update_fields=["role", "updated_at"])
             created = False
         return Response(
             {"kind": "access", "id": str(access.pk), "role": access.role},
