@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Tests of the twake app in the development image of Docs. Extra arguments go
+# to pytest.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+cmd=(pytest twake -q --no-cov -p no:cacheprovider "$@")
+docker compose -f docker-compose.test.yml run --rm --build test "${cmd[@]}"
+status=$?
+docker compose -f docker-compose.test.yml down -v >/dev/null 2>&1 || true
+exit $status

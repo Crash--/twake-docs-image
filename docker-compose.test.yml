@@ -1,0 +1,51 @@
+# Runs the tests of the twake app against the development image of Docs, the
+# app mounted into it. `./bin/test` wraps it.
+name: twake-docs-image-test
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: impress
+      POSTGRES_USER: dinum
+      POSTGRES_PASSWORD: pass
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d impress -U dinum"]
+      interval: 1s
+      timeout: 2s
+      retries: 60
+
+  test:
+    image: docs-drive/impress-backend-dev:v6.0.4
+    user: "1000"
+    working_dir: /app
+    environment:
+      DJANGO_SETTINGS_MODULE: twake_settings
+      DJANGO_CONFIGURATION: Test
+      DJANGO_SECRET_KEY: test
+      DJANGO_ALLOWED_HOSTS: "*"
+      PYTHONPATH: /app
+      DB_HOST: postgresql
+      DB_NAME: impress
+      DB_USER: dinum
+      DB_PASSWORD: pass
+      DB_PORT: "5432"
+      DJANGO_SERVER_TO_SERVER_API_TOKENS: s2s-test-token
+      DJANGO_EMAIL_HOST: localhost
+      DJANGO_EMAIL_PORT: "1025"
+      STORAGES_STATICFILES_BACKEND: django.contrib.staticfiles.storage.StaticFilesStorage
+      AWS_S3_ENDPOINT_URL: http://minio:9000
+      AWS_S3_ACCESS_KEY_ID: impress
+      AWS_S3_SECRET_ACCESS_KEY: password
+      JWT_PRIVATE_KEY_FILE: /data/jwt/private.pem
+      LOGGING_LEVEL_HANDLERS_CONSOLE: WARNING
+    volumes:
+      - ./twake_settings.py:/app/twake_settings.py:ro
+      - ./twake:/app/twake
+      - ./.local/jwt:/data/jwt:ro
+      # Built by the mail-builder target of the Docs Dockerfile, absent from the dev image
+      - ./.local/mail-templates:/app/core/templates/mail:ro
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    command: ["pytest", "twake", "-q", "--no-cov", "-p", "no:cacheprovider"]
