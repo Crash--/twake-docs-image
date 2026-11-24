@@ -81,6 +81,67 @@ def create_document(request):
     return Response({"id": str(document.pk)}, status=status.HTTP_201_CREATED)
 
 
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def share_by_email(request, document_id):
+    """Share a document with a person named by email, as the suggestions of the
+    Workplace give them: an access when Docs knows the person, an invitation
+    otherwise, with the sharing email of Docs in both cases."""
+    document = document_or_404(document_id)
+    if not can_manage(document, request.user):
+        raise exceptions.PermissionDenied()
+    serializer = serializers.ShareByEmailSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    email = serializer.validated_data["email"]
+    role = serializer.validated_data["role"]
+    if (
+        role == RoleChoices.OWNER
+        and document.get_role(request.user) != RoleChoices.OWNER
+    ):
+        raise exceptions.PermissionDenied("Only owners can assign owners.")
+    user = models.User.objects.filter(email__iexact=email).first()
+    if user is not None:
+        access = models.DocumentAccess.objects.filter(
+            document=document, user=user
+        ).first()
+        if access is None:
+            access = models.DocumentAccess.objects.create(
+                document=document, user=user, role=role
+            )
+            document.send_invitation_email(
+                user.email,
+                role,
+                request.user,
+                user.language or request.user.language or settings.LANGUAGE_CODE,
+            )
+            created = True
+        elif access.role != role:
+            # The same person again: one line, the new role (story P13)
+            access.role = role
+            access.save(update_fields=["role", "updated_at"])
+            created = False
+        else:
+            created = False
+        return Response(
+            {"kind": "access", "id": str(access.pk), "role": access.role},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+    invitation, created = models.Invitation.objects.get_or_create(
+        email=email, document=document, defaults={"role": role, "issuer": request.user}
+    )
+    if created:
+        document.send_invitation_email(
+            email, role, request.user, request.user.language or settings.LANGUAGE_CODE
+        )
+    elif invitation.role != role:
+        invitation.role = role
+        invitation.save(update_fields=["role", "updated_at"])
+    return Response(
+        {"kind": "invitation", "id": str(invitation.pk), "role": invitation.role},
+        status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+    )
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def grants(request, document_id):

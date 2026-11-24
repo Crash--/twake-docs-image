@@ -14,6 +14,11 @@ urlpatterns = [
     path(f"{API}session/", views.session, name="twake-session"),
     path(f"{API}documents/", views.create_document, name="twake-create-document"),
     path(
+        f"{API}documents/<uuid:document_id>/accesses/",
+        views.share_by_email,
+        name="twake-share-by-email",
+    ),
+    path(
         f"{API}documents/<uuid:document_id>/grants/",
         views.grants,
         name="twake-grants",

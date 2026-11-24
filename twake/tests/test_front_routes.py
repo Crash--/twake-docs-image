@@ -141,3 +141,45 @@ def test_grants_from_the_modal(alice, bob, session_client):
 
     assert session_client.delete(f"{url}{grant_id}/").status_code == 204
     assert outbox(events.GRANT_DELETED)[-1].data["grant_id"] == grant_id
+
+
+def test_share_by_email(alice, bob, session_client, settings):
+    """A recipient by email: an access for a known person, an invitation for an
+    unknown one, the same person again only changes the role (P1, I1, P13)."""
+    settings.EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
+    doc = factories.DocumentFactory(users=[(alice, "owner")], link_reach="restricted")
+    url = f"{API}documents/{doc.pk}/accesses/"
+    response = session_client.post(
+        url, {"email": "BOB@example.com", "role": "reader"}, format="json"
+    )
+    assert response.status_code == 201, response.json()
+    assert response.json()["kind"] == "access"
+    assert models.DocumentAccess.objects.get(document=doc, user=bob).role == "reader"
+    response = session_client.post(
+        url, {"email": "bob@example.com", "role": "editor"}, format="json"
+    )
+    assert response.status_code == 200
+    assert models.DocumentAccess.objects.get(document=doc, user=bob).role == "editor"
+    response = session_client.post(
+        url, {"email": "carol@example.com", "role": "reader"}, format="json"
+    )
+    assert response.status_code == 201
+    assert response.json()["kind"] == "invitation"
+    assert models.Invitation.objects.filter(
+        document=doc, email="carol@example.com"
+    ).exists()
+    from django.core import mail  # noqa: PLC0415
+
+    assert sorted(m.to[0] for m in mail.outbox) == [
+        "bob@example.com",
+        "carol@example.com",
+    ]
+    # a reader cannot share
+    bob_client = APIClient()
+    bob_client.force_login(bob)
+    assert (
+        bob_client.post(
+            url, {"email": "x@example.com", "role": "reader"}, format="json"
+        ).status_code
+        == 403
+    )

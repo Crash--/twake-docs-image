@@ -59,6 +59,13 @@ class GrantSerializer(serializers.ModelSerializer):
         return value
 
 
+class ShareByEmailSerializer(serializers.Serializer):
+    """`POST /api/v1.0/twake/documents/{id}/accesses/`: a recipient by email."""
+
+    email = serializers.EmailField()
+    role = serializers.ChoiceField(choices=RoleChoices.choices)
+
+
 class EnsureUserSerializer(serializers.Serializer):
     """`POST /twake/users/`: a user known from the Workplace, before any login."""
 
