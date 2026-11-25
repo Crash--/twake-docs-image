@@ -214,3 +214,23 @@ def test_share_by_email_makes_a_managed_access_direct(alice, bob, session_client
     assert response.status_code == 200
     assert not ManagedAccess.objects.filter(access=access).exists()
     assert models.DocumentAccess.objects.get(pk=access.pk).role == "editor"
+
+
+def test_link_reach_authenticated_is_refused(alice, session_client):
+    """The reach « every signed-in person » is not offered on the platform (L4):
+    the API refuses it, the two others go through."""
+    doc = factories.DocumentFactory(users=[(alice, "owner")], link_reach="restricted")
+    url = f"/api/v1.0/documents/{doc.pk}/link-configuration/"
+
+    response = session_client.put(url, {"link_reach": "authenticated"}, format="json")
+    assert response.status_code == 400
+    assert "link_reach" in response.json()
+    doc.refresh_from_db()
+    assert doc.link_reach == "restricted"
+
+    response = session_client.put(
+        url, {"link_reach": "public", "link_role": "reader"}, format="json"
+    )
+    assert response.status_code == 200
+    doc.refresh_from_db()
+    assert doc.link_reach == "public"

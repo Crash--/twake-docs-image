@@ -55,6 +55,7 @@ class TwakeMixin:
             *cls.MIDDLEWARE,
             "twake.middleware.ActorMiddleware",
             "twake.middleware.DocumentMovedMiddleware",
+            "twake.middleware.LinkReachMiddleware",
         ]
 
 

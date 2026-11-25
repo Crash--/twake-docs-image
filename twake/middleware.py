@@ -1,6 +1,9 @@
 """Request-scoped pieces the signal receivers cannot see."""
 
+import json
 import re
+
+from django.http import JsonResponse
 
 from core import models
 
@@ -41,3 +44,32 @@ class DocumentMovedMiddleware:
             if document is not None:
                 events.emit_document(events.DOCUMENT_MOVED, document)
         return response
+
+
+LINK_PATH = re.compile(
+    r"^/api/v[0-9.]+/documents/[0-9a-f-]{36}/link-configuration/?$"
+)
+
+
+class LinkReachMiddleware:
+    """
+    On the platform the link of a document is private or public, never open to
+    every signed-in person of every organization: the dialog does not offer
+    that reach, and the API refuses it.
+    """
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.method in ("PUT", "PATCH") and LINK_PATH.match(request.path):
+            try:
+                reach = json.loads(request.body or b"{}").get("link_reach")
+            except (ValueError, AttributeError):
+                reach = None
+            if reach == "authenticated":
+                return JsonResponse(
+                    {"link_reach": ["This reach is not available on the platform."]},
+                    status=400,
+                )
+        return self.get_response(request)
