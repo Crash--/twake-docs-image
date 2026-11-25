@@ -46,9 +46,7 @@ class DocumentMovedMiddleware:
         return response
 
 
-LINK_PATH = re.compile(
-    r"^/api/v[0-9.]+/documents/[0-9a-f-]{36}/link-configuration/?$"
-)
+LINK_PATH = re.compile(r"^/api/v[0-9.]+/documents/[0-9a-f-]{36}/link-configuration/?$")
 
 
 class LinkReachMiddleware:
@@ -65,7 +63,7 @@ class LinkReachMiddleware:
         if request.method in ("PUT", "PATCH") and LINK_PATH.match(request.path):
             try:
                 reach = json.loads(request.body or b"{}").get("link_reach")
-            except (ValueError, AttributeError):
+            except ValueError, AttributeError:
                 reach = None
             if reach == "authenticated":
                 return JsonResponse(
