@@ -1,5 +1,10 @@
 """The routes of the Docs front: session, creation with placement, grants."""
 
+import base64
+import json
+import time
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 from rest_framework.test import APIClient
 
@@ -16,23 +21,69 @@ pytestmark = pytest.mark.django_db
 API = "/api/v1.0/twake/"
 
 
+def jwt_expiring_in(seconds):
+    """An unsigned JWT whose `exp` is `seconds` from now."""
+
+    def segment(value):
+        return (
+            base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+        )
+
+    return (
+        f"{segment({'alg': 'none'})}.{segment({'exp': int(time.time()) + seconds})}.sig"
+    )
+
+
+def client_with_id_token(user, id_token, workplace="alice.twake.example"):
+    """An API client whose session holds the id token of the SSO."""
+    client = APIClient()
+    client.force_login(user)
+    session = client.session
+    session["oidc_id_token"] = id_token
+    if workplace:
+        session[WORKPLACE_FQDN_SESSION_KEY] = workplace
+    session.save()
+    return client
+
+
 def test_session_gives_the_id_token_and_the_workplace(alice):
     """The front reads what the bar and the SDK need from the session."""
-    client = APIClient()
-    client.force_login(alice)
-    session = client.session
-    session["oidc_id_token"] = "the-id-token"
-    session[WORKPLACE_FQDN_SESSION_KEY] = "alice.twake.example"
-    session.save()
-
-    response = client.get(f"{API}session/")
+    id_token = jwt_expiring_in(3600)
+    response = client_with_id_token(alice, id_token).get(f"{API}session/")
     assert response.status_code == 200
     assert response.json() == {
         "sub": "alice",
-        "id_token": "the-id-token",
+        "id_token": id_token,
         "workplace_fqdn": "alice.twake.example",
     }
     assert APIClient().get(f"{API}session/").status_code == 401
+
+
+@pytest.mark.parametrize(
+    "id_token", [jwt_expiring_in(-60), jwt_expiring_in(4 * 60), "not-a-jwt", None]
+)
+def test_session_with_an_id_token_about_to_expire(alice, id_token):
+    """An id token expired, expiring within 5 minutes or unreadable is not
+    given: the front follows a silent login that comes back to the page."""
+    response = client_with_id_token(alice, id_token).get(
+        f"{API}session/", {"next": "http://docs.example/docs/d1/?x=1"}
+    )
+    assert response.status_code == 401
+    refresh = urlparse(response.json()["refresh_url"])
+    assert refresh.path == "/api/v1.0/authenticate/"
+    assert parse_qs(refresh.query) == {
+        "silent": ["true"],
+        "next": ["http://docs.example/docs/d1/?x=1"],
+    }
+
+
+def test_session_off_the_platform_keeps_the_id_token(alice):
+    """Without a Workplace there is no bar to sign in: nothing to renew."""
+    response = client_with_id_token(alice, "not-a-jwt", workplace=None).get(
+        f"{API}session/"
+    )
+    assert response.status_code == 200
+    assert response.json()["workplace_fqdn"] is None
 
 
 def test_create_document_with_placement(alice, session_client):
@@ -188,10 +239,14 @@ def test_share_by_email(alice, bob, session_client, settings):
 def test_managed_access_ids_for_the_dialog(alice, bob, session_client):
     """The dialog hides the accesses a grant posed; one with a direct role stays."""
     doc = factories.DocumentFactory(users=[(alice, "owner")], link_reach="restricted")
-    managed = models.DocumentAccess.objects.create(document=doc, user=bob, role="reader")
+    managed = models.DocumentAccess.objects.create(
+        document=doc, user=bob, role="reader"
+    )
     ManagedAccess.objects.create(access=managed, previous_role="")
     erin = factories.UserFactory(sub="erin", email="erin@example.com")
-    direct = models.DocumentAccess.objects.create(document=doc, user=erin, role="editor")
+    direct = models.DocumentAccess.objects.create(
+        document=doc, user=erin, role="editor"
+    )
     ManagedAccess.objects.create(access=direct, previous_role="editor")
 
     response = session_client.get(f"{API}documents/{doc.pk}/accesses/managed/")

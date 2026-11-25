@@ -4,9 +4,15 @@ Two families: the routes of the Docs front, with the session of the user, and
 the admin routes of the side service, with the server-to-server token.
 """
 
+import base64
+import json
+import time
+from urllib.parse import urlencode
+
 from django.conf import settings
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.urls import reverse
 
 from rest_framework import exceptions, status
 from rest_framework.decorators import (
@@ -42,16 +48,55 @@ def can_manage(document, user):
 # Front routes, session of the user
 
 
+ID_TOKEN_MARGIN_SECONDS = 5 * 60
+
+
+def id_token_expiry(id_token):
+    """The `exp` claim of a JWT, read without checking the signature: the
+    token is the one the backend itself got from the SSO. None if unreadable."""
+    try:
+        payload = id_token.split(".")[1]
+        claims = json.loads(
+            base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        )
+        return int(claims["exp"])
+    except AttributeError, IndexError, KeyError, TypeError, ValueError:
+        return None
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def session(request):
     """What the Twake bar and SDK of the front need: the SSO id token and the
-    Workplace address of the user."""
+    Workplace address of the user.
+
+    The SSO gives id tokens of one hour and nobody renews them, while the
+    session of Docs lasts 12 hours. Like Mail and Calendar, which go through
+    the SSO again at each load, an id token about to expire is not given: the
+    answer is a 401 with the URL of a silent login (`prompt=none`) that comes
+    back to the page, `next`, with a new id token.
+    """
+    id_token = request.session.get("oidc_id_token")
+    workplace_fqdn = request.session.get(WORKPLACE_FQDN_SESSION_KEY)
+    expiry = id_token_expiry(id_token)
+    if workplace_fqdn and (
+        expiry is None or expiry - time.time() < ID_TOKEN_MARGIN_SECONDS
+    ):
+        query = urlencode(
+            {"silent": "true", "next": request.query_params.get("next") or "/"}
+        )
+        return Response(
+            {
+                "detail": "The id token of the session has expired.",
+                "refresh_url": f"{reverse('oidc_authentication_init')}?{query}",
+            },
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
     return Response(
         {
             "sub": request.user.sub,
-            "id_token": request.session.get("oidc_id_token"),
-            "workplace_fqdn": request.session.get(WORKPLACE_FQDN_SESSION_KEY),
+            "id_token": id_token,
+            "workplace_fqdn": workplace_fqdn,
         }
     )
 
