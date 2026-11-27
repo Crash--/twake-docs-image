@@ -679,6 +679,14 @@ def recompute_accesses(document, notify=True):
         ).run()
 
 
+def count_members(grant):
+    """Keep the count the modal shows on the line of the grant. A queryset
+    update, so no `grant.updated` event comes back to the side service."""
+    count = grant.members.filter(removed=False).count()
+    Grant.objects.filter(pk=grant.pk).update(member_count=count)
+    return count
+
+
 def describe_changes(document, report, grant):
     """What a recompute did, in the form of the contract: the people whose access
     was posed or whose role changed, with their role, and the ones who lost it."""
@@ -708,7 +716,7 @@ def describe_changes(document, report, grant):
 
     return {
         "document_id": str(document.pk),
-        "member_count": grant.members.filter(removed=False).count(),
+        "member_count": count_members(grant),
         "changed": [
             {**known(email), "role": roles.get(users[email].pk)}
             for email in dict.fromkeys([*report["created"], *report["updated"]])

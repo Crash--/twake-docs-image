@@ -216,6 +216,25 @@ def test_post_members_matches_the_contract_on_every_grant_of_the_source(
     assert role_of(erin_user, other) == "editor"
 
 
+def test_the_member_count_of_the_grant_follows_the_members(
+    admin_client, group, bob_user, erin_user
+):
+    """Story G1: the modal shows « n members » and nobody patches the grant."""
+    put(admin_client, group, T0, [BOB, ERIN])
+    group.refresh_from_db()
+    assert group.member_count == 2
+
+    post(admin_client, T1, remove=[ERIN])
+    group.refresh_from_db()
+    assert group.member_count == 1
+
+    post(admin_client, T2, add=[ERIN])
+    group.refresh_from_db()
+    assert group.member_count == 2
+    # No `grant.updated` for the side service to answer
+    assert not outbox(events.GRANT_UPDATED)
+
+
 def test_post_members_removes_and_unknown_source_does_nothing(
     admin_client, plan, group, erin_user
 ):
