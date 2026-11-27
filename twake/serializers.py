@@ -75,12 +75,19 @@ class EnsureUserSerializer(serializers.Serializer):
     language = serializers.ChoiceField(
         choices=[lang[0] for lang in settings.LANGUAGES], required=False
     )
+    workplace_fqdn = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
+    organization_id = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
 
 
 class UserSettingsSerializer(serializers.Serializer):
     """`PUT /twake/users/settings/`: the common settings of the Workplace."""
 
     email = serializers.EmailField()
+    updated_at = serializers.DateTimeField(required=False)
     language = serializers.ChoiceField(
         choices=[lang[0] for lang in settings.LANGUAGES],
         required=False,

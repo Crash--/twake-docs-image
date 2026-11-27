@@ -30,6 +30,39 @@ class Outbox(models.Model):
         return f"{self.type} {self.id}"
 
 
+class WorkplaceUser(models.Model):
+    """
+    What the Workplace says about a person Docs knows: their instance and
+    organization, and the date of the last settings applied, to ignore an older
+    one that arrives late.
+    """
+
+    user = models.OneToOneField(
+        User, on_delete=models.CASCADE, related_name="twake_workplace"
+    )
+    workplace_fqdn = models.CharField(max_length=255, blank=True)
+    organization_id = models.CharField(max_length=255, blank=True)
+    settings_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "twake_workplace_user"
+
+    def __str__(self):
+        return f"{self.user_id} on {self.workplace_fqdn or 'an unknown instance'}"
+
+
+def workplace_fqdn_of(user_id):
+    """The instance of a person, empty when Docs does not know it."""
+    if user_id is None:
+        return ""
+    return (
+        WorkplaceUser.objects.filter(user_id=user_id)
+        .values_list("workplace_fqdn", flat=True)
+        .first()
+        or ""
+    )
+
+
 class SourceKind(models.TextChoices):
     """Where a grant comes from."""
 

@@ -20,6 +20,7 @@ from rest_framework.decorators import (
     authentication_classes,
     permission_classes,
 )
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -29,7 +30,7 @@ from core.choices import PRIVILEGED_ROLES, RoleChoices
 from core.utils.treebeard import create_tree_node_with_retry
 
 from . import events, serializers
-from .models import Grant, ManagedAccess
+from .models import Grant, ManagedAccess, WorkplaceUser
 from .oidc import WORKPLACE_FQDN_SESSION_KEY
 
 
@@ -265,10 +266,43 @@ def admin_route(methods):
     return decorate
 
 
-@admin_route(["POST"])
+class AdminPagination(PageNumberPagination):
+    """Pages of at most 200, the size of a batch of the side service."""
+
+    page_size = 200
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
+
+def list_users(request):
+    """Every person Docs knows with an instance, for the nightly pass."""
+    users = (
+        models.User.objects.filter(is_active=True, sub__isnull=False)
+        .select_related("twake_workplace")
+        .order_by("created_at", "id")
+    )
+    paginator = AdminPagination()
+    page = paginator.paginate_queryset(users, request)
+    return paginator.get_paginated_response(
+        [
+            {
+                "sub": user.sub,
+                "email": user.email,
+                "workplace_fqdn": workplace.workplace_fqdn if workplace else "",
+            }
+            for user in page
+            for workplace in [getattr(user, "twake_workplace", None)]
+        ]
+    )
+
+
+@admin_route(["GET", "POST"])
 def ensure_user(request):
     """Create a user ahead of their first login, and convert their invitations
-    into accesses, as Docs does at the first login (`User.save`)."""
+    into accesses, as Docs does at the first login (`User.save`). A GET lists
+    the users."""
+    if request.method == "GET":
+        return list_users(request)
     serializer = serializers.EnsureUserSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
@@ -294,6 +328,13 @@ def ensure_user(request):
         # The conversion of the invitations is a bulk_create: no signal
         for access in models.DocumentAccess.objects.filter(user=user):
             events.emit(events.ACCESS_CREATED, events.access_data(access))
+    workplace = {
+        field: data[field]
+        for field in ("workplace_fqdn", "organization_id")
+        if field in data
+    }
+    if workplace:
+        WorkplaceUser.objects.update_or_create(user=user, defaults=workplace)
     return Response(
         {"id": str(user.pk), "sub": user.sub, "created": created},
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
@@ -309,15 +350,26 @@ def user_settings(request):
     user = models.User.objects.filter(email__iexact=data["email"]).first()
     if user is None:
         return Response({"applied": False}, status=status.HTTP_404_NOT_FOUND)
-    fields = []
-    if data.get("language"):
-        user.language = data["language"]
-        fields.append("language")
-    if data.get("timezone"):
-        user.timezone = data["timezone"]
-        fields.append("timezone")
-    if fields:
-        user.save(update_fields=fields)
+    updated_at = data.get("updated_at")
+    # The date and the settings it guards are written together
+    with transaction.atomic():
+        workplace, _ = WorkplaceUser.objects.select_for_update().get_or_create(
+            user=user
+        )
+        if updated_at and workplace.settings_at and updated_at < workplace.settings_at:
+            return Response({"applied": False})
+        if updated_at:
+            workplace.settings_at = updated_at
+            workplace.save(update_fields=["settings_at"])
+        fields = []
+        if data.get("language"):
+            user.language = data["language"]
+            fields.append("language")
+        if data.get("timezone"):
+            user.timezone = data["timezone"]
+            fields.append("timezone")
+        if fields:
+            user.save(update_fields=fields)
     return Response({"applied": bool(fields), "fields": fields})
 
 
