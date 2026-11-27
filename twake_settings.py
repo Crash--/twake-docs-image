@@ -4,6 +4,8 @@ Selected with DJANGO_SETTINGS_MODULE=twake_settings, the upstream code is not
 modified.
 """
 
+import os
+
 from configurations import values
 from impress import settings as impress
 
@@ -26,6 +28,19 @@ class TwakeMixin:
     )
     TWAKE_AMQP_EXCHANGE = values.Value(
         "activity", environ_name="TWAKE_AMQP_EXCHANGE", environ_prefix=None
+    )
+    # The look of Twake: the sheet is served by the front of the fork
+    # (public/twake-theme, /twake/ being the admin routes of this app), the
+    # customization file comes with the twake app.
+    FRONTEND_CSS_URL = values.Value(
+        "/twake-theme/theme.css",
+        environ_name="FRONTEND_CSS_URL",
+        environ_prefix=None,
+    )
+    THEME_CUSTOMIZATION_FILE_PATH = values.Value(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "twake", "theme.json"),
+        environ_name="THEME_CUSTOMIZATION_FILE_PATH",
+        environ_prefix=None,
     )
 
     @classmethod
