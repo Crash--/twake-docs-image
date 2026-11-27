@@ -276,6 +276,17 @@ class AdminPagination(PageNumberPagination):
     max_page_size = 200
 
 
+def person_of(user):
+    """A person as the side service reads them, from a user loaded with
+    `select_related("twake_workplace")`."""
+    workplace = getattr(user, "twake_workplace", None)
+    return {
+        "sub": user.sub,
+        "email": user.email,
+        "workplace_fqdn": workplace.workplace_fqdn if workplace else "",
+    }
+
+
 def list_users(request):
     """Every person Docs knows with an instance, for the nightly pass."""
     users = (
@@ -285,17 +296,7 @@ def list_users(request):
     )
     paginator = AdminPagination()
     page = paginator.paginate_queryset(users, request)
-    return paginator.get_paginated_response(
-        [
-            {
-                "sub": user.sub,
-                "email": user.email,
-                "workplace_fqdn": workplace.workplace_fqdn if workplace else "",
-            }
-            for user in page
-            for workplace in [getattr(user, "twake_workplace", None)]
-        ]
-    )
+    return paginator.get_paginated_response([person_of(user) for user in page])
 
 
 @admin_route(["GET", "POST"])
@@ -413,6 +414,57 @@ def user_settings(request):
         if fields:
             user.save(update_fields=fields)
     return Response({"applied": bool(fields), "fields": fields})
+
+
+@admin_route(["GET"])
+def admin_document(request, document_id):
+    """A document with its owners, the people who reach it and its grants, in
+    the trash too: the side service reads it to know who to write pointers to."""
+    document = get_object_or_404(models.Document, pk=document_id)
+    rows = models.DocumentAccess.objects.filter(
+        document__path__in=document.get_self_and_ancestors_paths(),
+        user__isnull=False,
+    ).select_related("user", "user__twake_workplace")
+    # A direct access that a grant also covers is not managed: it is a gesture
+    managed_ids = set(
+        ManagedAccess.objects.filter(access__in=rows, previous_role="").values_list(
+            "access_id", flat=True
+        )
+    )
+    owners, accessors = {}, {}
+    for row in rows:
+        if row.role == RoleChoices.OWNER:
+            owners[row.user_id] = person_of(row.user)
+        else:
+            entry = accessors.setdefault(
+                row.user_id, {**person_of(row.user), "managed": True}
+            )
+            # A person with a direct access on any level is not managed
+            entry["managed"] = entry["managed"] and row.pk in managed_ids
+    for user_id in owners:
+        accessors.pop(user_id, None)
+    tree = models.DocumentAccess.objects.filter(
+        document__path__startswith=document.path, user__isnull=False
+    ).select_related("user", "user__twake_workplace")
+    parent = document.get_parent() if document.depth > 1 else None
+    return Response(
+        {
+            "id": str(document.pk),
+            "title": document.title or "",
+            "parent_id": str(parent.pk) if parent else None,
+            "root_id": str(document.get_root().pk),
+            "deleted": document.ancestors_deleted_at is not None,
+            "owners": list(owners.values()),
+            "accessors": list(accessors.values()),
+            "tree_accessors": list(
+                {row.user_id: person_of(row.user) for row in tree}.values()
+            ),
+            "grants": serializers.GrantSerializer(
+                Grant.objects.filter(document=document).order_by("created_at"),
+                many=True,
+            ).data,
+        }
+    )
 
 
 @admin_route(["GET"])

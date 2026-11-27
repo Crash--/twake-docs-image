@@ -38,6 +38,11 @@ urlpatterns = [
     path("twake/users/settings/", views.user_settings, name="twake-admin-settings"),
     path("twake/entry-points/", views.entry_points, name="twake-admin-entry-points"),
     path(
+        "twake/documents/<uuid:document_id>/",
+        views.admin_document,
+        name="twake-admin-document",
+    ),
+    path(
         "twake/documents/<uuid:document_id>/managed-accesses/",
         views.managed_accesses,
         name="twake-admin-managed-accesses",
