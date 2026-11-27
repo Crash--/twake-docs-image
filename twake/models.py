@@ -116,6 +116,35 @@ class Grant(models.Model):
         )
 
 
+class GrantMember(models.Model):
+    """
+    A person a grant gives access to, as the side service last told Docs. The
+    date `at` and the `removed` mark are kept so that a change that arrives late,
+    or in the wrong order, does nothing.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    grant = models.ForeignKey(Grant, on_delete=models.CASCADE, related_name="members")
+    # In lowercase
+    email = models.CharField(max_length=255)
+    sub = models.CharField(max_length=255, blank=True)
+    workplace_fqdn = models.CharField(max_length=255, blank=True)
+    read_only = models.BooleanField(default=False)
+    at = models.DateTimeField()
+    removed = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "twake_grant_member"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["grant", "email"], name="twake_grant_member_unique_email"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.email} in {self.grant_id}{' (removed)' if self.removed else ''}"
+
+
 class ManagedAccess(models.Model):
     """
     An access the side service posed because of grants, with the direct role

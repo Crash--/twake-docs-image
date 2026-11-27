@@ -7,7 +7,8 @@ from django.http import JsonResponse
 
 from core import models
 
-from . import events
+from . import events, views
+from .models import Grant
 
 
 class ActorMiddleware:
@@ -43,6 +44,10 @@ class DocumentMovedMiddleware:
             document = models.Document.objects.filter(pk=match["id"]).first()
             if document is not None:
                 events.emit_document(events.DOCUMENT_MOVED, document)
+                # The move wiped the direct accesses of the document, the ones
+                # the grants posed with them: given back, without a second email
+                if Grant.objects.filter(document=document).exists():
+                    views.recompute_accesses(document, notify=False)
         return response
 
 

@@ -126,6 +126,35 @@ class EntryPointsSerializer(serializers.Serializer):
     within = serializers.UUIDField(required=False)
 
 
+class MemberSerializer(serializers.Serializer):
+    """A person of a group or a drive, named by email."""
+
+    email = serializers.EmailField()
+    sub = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    workplace_fqdn = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
+    read_only = serializers.BooleanField(required=False, default=False)
+
+
+class GrantMembersSerializer(serializers.Serializer):
+    """`PUT /twake/grants/{id}/members/`: the complete list at a date."""
+
+    as_of = serializers.DateTimeField()
+    members = MemberSerializer(many=True)
+
+
+class SourceMembersSerializer(serializers.Serializer):
+    """`POST /twake/grants/members/`: members added or removed at a date, on
+    every grant of a source."""
+
+    source_kind = serializers.ChoiceField(choices=SourceKind.choices)
+    source_id = serializers.CharField(max_length=255)
+    at = serializers.DateTimeField()
+    add = MemberSerializer(many=True, required=False)
+    remove = MemberSerializer(many=True, required=False)
+
+
 class ManagedAccessItemSerializer(serializers.Serializer):
     """One member a grant gives access to."""
 

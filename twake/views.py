@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models.functions import Lower
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 
@@ -32,7 +33,7 @@ from core.utils.treebeard import create_tree_node_with_retry
 from . import events, serializers
 from .entry_points import drives_of, find_people
 from .entry_points import entry_points as compute_entry_points
-from .models import Grant, ManagedAccess, WorkplaceUser
+from .models import Grant, GrantMember, ManagedAccess, WorkplaceUser
 from .oidc import WORKPLACE_FQDN_SESSION_KEY
 
 
@@ -231,7 +232,7 @@ def grants(request, document_id):
             existing, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        save_changed_grant(serializer)
         return Response(serializer.data)
     serializer.save(document=document, created_by=request.user)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -246,11 +247,11 @@ def grant(request, document_id, grant_id):
         raise exceptions.PermissionDenied()
     instance = get_object_or_404(Grant, pk=grant_id, document=document)
     if request.method == "DELETE":
-        instance.delete()
+        delete_grant(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
     serializer = serializers.GrantSerializer(instance, data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
-    serializer.save()
+    save_changed_grant(serializer)
     return Response(serializer.data)
 
 
@@ -507,7 +508,7 @@ def admin_create_grant(request, document_id):
     )
     serializer.is_valid(raise_exception=True)
     if existing:
-        serializer.save()
+        save_changed_grant(serializer)
         return Response(serializer.data)
     serializer.save(document=document)
     return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -517,16 +518,17 @@ def admin_create_grant(request, document_id):
 def admin_delete_grant(request, document_id, grant_id):
     """Remove a shared drive grant."""
     instance = get_object_or_404(Grant, pk=grant_id, document_id=document_id)
-    instance.delete()
+    delete_grant(instance)
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ManagedAccessesSync:
     """One pass of `managed_accesses`, see the view."""
 
-    def __init__(self, document, wanted):
+    def __init__(self, document, wanted, notify=True):
         self.document = document
         self.wanted = wanted
+        self.notify = notify
         self.sender = (
             document.creator
             or models.User.objects.filter(
@@ -561,7 +563,7 @@ class ManagedAccessesSync:
         return self.report
 
     def email_sharing(self, email, role, language):
-        if self.sender:
+        if self.sender and self.notify:
             self.document.send_invitation_email(email, role, self.sender, language)
 
     def invite(self, email, role):
@@ -641,3 +643,179 @@ def managed_accesses(request, document_id):
     with transaction.atomic():
         report = ManagedAccessesSync(document, wanted).run()
     return Response(report)
+
+
+def wanted_accesses(document):
+    """The role each person gets from the grants of a document: the strongest
+    of their grants, `reader` when they are read-only members of a drive. The
+    owners are left out, they have the document anyway."""
+    owners = {
+        email.lower()
+        for email in models.DocumentAccess.objects.filter(
+            document__path__in=document.get_self_and_ancestors_paths(),
+            role=RoleChoices.OWNER,
+            user__isnull=False,
+        ).values_list("user__email", flat=True)
+    }
+    wanted = {}
+    for member in GrantMember.objects.filter(
+        grant__document=document, removed=False
+    ).select_related("grant"):
+        if member.email in owners:
+            continue
+        role = RoleChoices.READER if member.read_only else member.grant.role
+        wanted[member.email] = RoleChoices.max(wanted.get(member.email), role)
+    return wanted
+
+
+def recompute_accesses(document, notify=True):
+    """Bring the managed accesses of a document to what its grants give, and
+    report what changed. `notify=False` poses them without the sharing email."""
+    with transaction.atomic():
+        # Two grants of a document are written by two requests: one at a time
+        document = models.Document.objects.select_for_update().get(pk=document.pk)
+        return ManagedAccessesSync(
+            document, wanted_accesses(document), notify=notify
+        ).run()
+
+
+def describe_changes(document, report, grant):
+    """What a recompute did, in the form of the contract: the people whose access
+    was posed or whose role changed, with their role, and the ones who lost it."""
+    emails = {*report["created"], *report["updated"], *report["removed"]}
+    users = {
+        user.email.lower(): user
+        for user in models.User.objects.annotate(lowered=Lower("email"))
+        .filter(lowered__in=emails)
+        .select_related("twake_workplace")
+    }
+    roles = dict(
+        models.DocumentAccess.objects.filter(
+            document=document, user__in=users.values()
+        ).values_list("user_id", "role")
+    )
+    # The instance Docs knows, else the one the member came with
+    fqdns = dict(
+        grant.members.filter(email__in=emails).values_list("email", "workplace_fqdn")
+    )
+
+    def known(email):
+        person = person_of(users[email])
+        return {
+            **person,
+            "workplace_fqdn": person["workplace_fqdn"] or fqdns.get(email, ""),
+        }
+
+    return {
+        "document_id": str(document.pk),
+        "member_count": grant.members.filter(removed=False).count(),
+        "changed": [
+            {**known(email), "role": roles.get(users[email].pk)}
+            for email in dict.fromkeys([*report["created"], *report["updated"]])
+            if email in users
+        ],
+        "removed": [known(email) for email in report["removed"] if email in users],
+    }
+
+
+def write_member(grant, rows, item, at, removed):
+    """Write one member of a grant, unless a later change or a later full list
+    already decided about them."""
+    email = item["email"].lower()
+    row = rows.get(email)
+    # A person with no row yet is known from the full list the grant last had
+    newest = row.at if row else grant.members_as_of
+    if newest and newest > at:
+        return
+    values = {"at": at, "removed": removed}
+    for field in ("sub", "workplace_fqdn"):
+        if item.get(field):
+            values[field] = item[field]
+    if not removed:
+        values["read_only"] = item["read_only"]
+    if row is None:
+        rows[email] = GrantMember.objects.create(grant=grant, email=email, **values)
+        return
+    for field, value in values.items():
+        setattr(row, field, value)
+    row.save(update_fields=list(values))
+
+
+@admin_route(["PUT"])
+def grant_members(request, grant_id):
+    """
+    The complete list of the members of a grant, read at `as_of`.
+
+    The members of the list are written. A member who is not in it and whose row
+    is older than `as_of` is marked removed: a row newer than `as_of` is a change
+    that happened while the list was being read, and it stays. A list older than
+    the last one given is refused (409).
+    """
+    serializer = serializers.GrantMembersSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    as_of = serializer.validated_data["as_of"]
+    with transaction.atomic():
+        grant = get_object_or_404(
+            Grant.objects.select_for_update().select_related("document"), pk=grant_id
+        )
+        if grant.members_as_of and as_of < grant.members_as_of:
+            return Response(
+                {"as_of": ["A more recent list of members was already given."]},
+                status=status.HTTP_409_CONFLICT,
+            )
+        rows = {row.email: row for row in grant.members.all()}
+        listed = set()
+        for item in serializer.validated_data["members"]:
+            listed.add(item["email"].lower())
+            write_member(grant, rows, item, as_of, removed=False)
+        for email, row in rows.items():
+            if email not in listed and not row.removed and row.at < as_of:
+                row.removed = True
+                row.at = as_of
+                row.save(update_fields=["removed", "at"])
+        Grant.objects.filter(pk=grant.pk).update(members_as_of=as_of)
+        report = recompute_accesses(grant.document)
+        body = describe_changes(grant.document, report, grant)
+    return Response({**body, "unknown": report["unknown"]})
+
+
+@admin_route(["POST"])
+def source_members(request):
+    """People added to or removed from a group or a drive, on every grant of
+    that source at once. Each row keeps its date, so that a change older than
+    the one already applied does nothing."""
+    serializer = serializers.SourceMembersSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+    documents = []
+    with transaction.atomic():
+        for grant in (
+            Grant.objects.select_for_update()
+            .select_related("document")
+            .filter(source_kind=data["source_kind"], source_id=data["source_id"])
+            .order_by("pk")
+        ):
+            rows = {row.email: row for row in grant.members.all()}
+            for item in data.get("add", []):
+                write_member(grant, rows, item, data["at"], removed=False)
+            for item in data.get("remove", []):
+                write_member(grant, rows, item, data["at"], removed=True)
+            report = recompute_accesses(grant.document)
+            documents.append(describe_changes(grant.document, report, grant))
+    return Response({"documents": documents})
+
+
+def save_changed_grant(serializer):
+    """Save a grant; when its role changed, so do the accesses it gives."""
+    old_role = serializer.instance.role
+    grant = serializer.save()
+    if grant.role != old_role:
+        recompute_accesses(grant.document)
+
+
+def delete_grant(grant):
+    """Remove a grant and its members, and take back the accesses it gave."""
+    document = grant.document
+    with transaction.atomic():
+        grant.delete()
+        recompute_accesses(document)

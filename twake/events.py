@@ -203,7 +203,22 @@ def grant_saved(sender, instance, created, **kwargs):
     emit(GRANT_CREATED if created else GRANT_UPDATED, grant_data(instance))
 
 
+@receiver(signals.pre_delete, sender=Grant)
+def grant_deleting(sender, instance, **kwargs):
+    # pylint: disable=unused-argument
+    # Read before the members go with the grant: the accesses that follow are
+    # managed and ignored, so the side service needs this list to know whom to
+    # recompute
+    instance.twake_members = [
+        {"sub": row.sub, "email": row.email, "workplace_fqdn": row.workplace_fqdn}
+        for row in instance.members.filter(removed=False)
+    ]
+
+
 @receiver(signals.post_delete, sender=Grant)
 def grant_deleted(sender, instance, **kwargs):
     # pylint: disable=unused-argument
-    emit(GRANT_DELETED, grant_data(instance))
+    emit(
+        GRANT_DELETED,
+        {**grant_data(instance), "members": getattr(instance, "twake_members", [])},
+    )
