@@ -5,7 +5,7 @@ import pytest
 from core import factories, models
 
 from twake import events
-from twake.models import Grant
+from twake.models import Grant, ManagedAccess, WorkplaceUser
 
 from .conftest import outbox
 
@@ -84,6 +84,7 @@ def test_access_and_invitation_events(alice, bob, session_client):
         "access_id": access_id,
         "sub": "bob",
         "email": "bob@example.com",
+        "workplace_fqdn": "",
         "team": None,
         "role": "reader",
         "managed": False,
@@ -156,3 +157,87 @@ def test_purge_event(alice):
         str(a.pk),
         str(a1.pk),
     }
+
+
+def test_access_events_carry_the_instance_and_the_managed_mark(alice, admin_client):
+    """The example of the contract, section 6.5: a granted access is `managed`
+    in its three events, `deleted` included."""
+    bob = factories.UserFactory(sub="bob", email="bob@docs-drive.test")
+    WorkplaceUser.objects.create(user=bob, workplace_fqdn="bob.example.net")
+    doc = factories.DocumentFactory(
+        users=[(alice, "owner")], title="Plan", link_reach="restricted"
+    )
+    grant = Grant.objects.create(
+        document=doc, source_kind="group", source_id="g1", role="reader"
+    )
+    member = {"email": "bob@docs-drive.test", "sub": "bob", "read_only": False}
+    url = f"/twake/grants/{grant.pk}/members/"
+
+    admin_client.put(
+        url, {"as_of": "2026-11-27T10:00:00.000Z", "members": [member]}, format="json"
+    )
+    created = outbox(events.ACCESS_CREATED)[-1]
+    assert created.data == {
+        "document_id": str(doc.pk),
+        "access_id": created.data["access_id"],
+        "sub": "bob",
+        "email": "bob@docs-drive.test",
+        "workplace_fqdn": "bob.example.net",
+        "team": None,
+        "role": "reader",
+        "managed": True,
+    }
+
+    admin_client.put(
+        url, {"as_of": "2026-11-27T10:00:01.000Z", "members": []}, format="json"
+    )
+    deleted = outbox(events.ACCESS_DELETED)[-1]
+    assert deleted.data["access_id"] == created.data["access_id"]
+    assert deleted.data["managed"] is True
+    assert deleted.data["workplace_fqdn"] == "bob.example.net"
+
+
+def test_access_deleted_by_hand_is_not_managed(alice, bob):
+    doc = factories.DocumentFactory(
+        users=[(alice, "owner")], title="A", link_reach="restricted"
+    )
+    access = models.DocumentAccess.objects.create(document=doc, user=bob, role="reader")
+    access.delete()
+    assert outbox(events.ACCESS_DELETED)[-1].data["managed"] is False
+
+
+def test_access_covered_by_a_grant_but_held_directly_is_not_managed(alice, bob):
+    """A person who also has the document by hand: their gestures are not
+    ignored, even when a grant covers them."""
+    doc = factories.DocumentFactory(
+        users=[(alice, "owner")], title="A", link_reach="restricted"
+    )
+    access = models.DocumentAccess.objects.create(document=doc, user=bob, role="reader")
+    ManagedAccess.objects.create(access=access, previous_role="reader")
+    access.delete()
+    assert outbox(events.ACCESS_DELETED)[-1].data["managed"] is False
+
+
+def test_accesses_taken_back_with_a_grant_are_managed(alice, admin_client):
+    """The `access.deleted` that follow `grant.deleted` are managed, and the
+    grant names the members to recompute."""
+    bob = factories.UserFactory(sub="bob", email="bob@docs-drive.test")
+    doc = factories.DocumentFactory(
+        users=[(alice, "owner")], title="Plan", link_reach="restricted"
+    )
+    grant = Grant.objects.create(
+        document=doc, source_kind="group", source_id="g1", role="reader"
+    )
+    member = {"email": bob.email, "sub": "bob", "read_only": False}
+    admin_client.put(
+        f"/twake/grants/{grant.pk}/members/",
+        {"as_of": "2026-11-27T10:00:00.000Z", "members": [member]},
+        format="json",
+    )
+
+    admin_client.delete(f"/twake/documents/{doc.pk}/grants/{grant.pk}/")
+
+    assert outbox(events.ACCESS_DELETED)[-1].data["managed"] is True
+    assert [m["sub"] for m in outbox(events.GRANT_DELETED)[-1].data["members"]] == [
+        "bob"
+    ]

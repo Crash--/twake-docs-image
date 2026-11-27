@@ -7,7 +7,7 @@ from django.dispatch import receiver
 
 from core import models
 
-from .models import Grant, ManagedAccess, Outbox
+from .models import Grant, ManagedAccess, Outbox, workplace_fqdn_of
 
 SOURCE = "twake://docs"
 
@@ -113,14 +113,21 @@ def document_deleted(sender, instance, **kwargs):
     emit(DOCUMENT_DELETED, {"id": str(instance.pk)})
 
 
+def managed_access(access_id):
+    """Whether only grants gave the access. One that a person also holds directly
+    is a gesture of theirs, never ignored."""
+    return ManagedAccess.objects.filter(access_id=access_id, previous_role="").exists()
+
+
 def access_data(access):
     """What every access event carries."""
-    managed = ManagedAccess.objects.filter(access_id=access.pk).exists()
+    managed = managed_access(access.pk)
     return {
         "document_id": str(access.document_id),
         "access_id": str(access.pk),
         "sub": access.user.sub if access.user_id else None,
         "email": access.user.email if access.user_id else None,
+        "workplace_fqdn": workplace_fqdn_of(access.user_id),
         "team": access.team or None,
         "role": access.role,
         "managed": managed,
@@ -133,6 +140,13 @@ def access_saved(sender, instance, created, **kwargs):
     emit(ACCESS_CREATED if created else ACCESS_UPDATED, access_data(instance))
 
 
+@receiver(signals.pre_delete, sender=models.DocumentAccess)
+def access_deleting(sender, instance, **kwargs):
+    # pylint: disable=unused-argument
+    # Read before the deletion: the ManagedAccess row is deleted with the access
+    instance.was_managed = managed_access(instance.pk)
+
+
 @receiver(signals.post_delete, sender=models.DocumentAccess)
 def access_deleted(sender, instance, **kwargs):
     # pylint: disable=unused-argument
@@ -143,8 +157,10 @@ def access_deleted(sender, instance, **kwargs):
             "access_id": str(instance.pk),
             "sub": instance.user.sub if instance.user_id else None,
             "email": instance.user.email if instance.user_id else None,
+            "workplace_fqdn": workplace_fqdn_of(instance.user_id),
             "team": instance.team or None,
             "role": instance.role,
+            "managed": getattr(instance, "was_managed", False),
         },
     )
 
