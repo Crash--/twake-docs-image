@@ -51,6 +51,7 @@ urlpatterns = [
         views.admin_delete_grant,
         name="twake-admin-delete-grant",
     ),
+    path("twake/grants/", views.admin_grants, name="twake-admin-grants"),
     path("twake/grants/<uuid:grant_id>/", views.admin_grant, name="twake-admin-grant"),
     *impress_urlpatterns,
 ]

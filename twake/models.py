@@ -86,6 +86,15 @@ class Grant(models.Model):
     name = models.CharField(max_length=255, blank=True)
     member_count = models.PositiveIntegerField(null=True, blank=True)
     role = models.CharField(max_length=20, choices=RoleChoices.choices)
+    # The group of an organization, by its organization and its LDAP id: the
+    # `source_id` is a hash the side service cannot reverse
+    organization_id = models.CharField(max_length=255, null=True, blank=True)
+    external_id = models.CharField(max_length=255, null=True, blank=True)
+    # The instance that owns the shared drive
+    owner_instance = models.CharField(max_length=255, null=True, blank=True)
+    # The date of the member list the grant was last given in full, to ignore
+    # an older one
+    members_as_of = models.DateTimeField(null=True, blank=True)
     created_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
     )

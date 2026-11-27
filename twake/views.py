@@ -373,6 +373,20 @@ def user_settings(request):
     return Response({"applied": bool(fields), "fields": fields})
 
 
+@admin_route(["GET"])
+def admin_grants(request):
+    """The grants of a source, or all of them for the nightly pass."""
+    queryset = Grant.objects.order_by("created_at", "id")
+    for field in ("source_kind", "source_id"):
+        if field in request.query_params:
+            queryset = queryset.filter(**{field: request.query_params[field]})
+    paginator = AdminPagination()
+    page = paginator.paginate_queryset(queryset, request)
+    return paginator.get_paginated_response(
+        serializers.GrantSerializer(page, many=True).data
+    )
+
+
 @admin_route(["GET", "PATCH"])
 def admin_grant(request, grant_id):
     """Read a grant, or update what the side service knows about it: the number

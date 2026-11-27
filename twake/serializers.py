@@ -1,5 +1,7 @@
 """Serializers of the twake routes."""
 
+import datetime
+
 from django.conf import settings
 
 from rest_framework import serializers
@@ -7,6 +9,19 @@ from rest_framework import serializers
 from core.choices import RoleChoices
 
 from .models import Grant, SourceKind
+
+
+class MillisecondDateTimeField(serializers.DateTimeField):
+    """RFC 3339 in UTC to the millisecond, the form the side service compares."""
+
+    def to_representation(self, value):
+        if value is None:
+            return None
+        return (
+            value.astimezone(datetime.timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
 
 
 class PlacementSerializer(serializers.Serializer):
@@ -26,6 +41,8 @@ class CreateDocumentSerializer(serializers.Serializer):
 class GrantSerializer(serializers.ModelSerializer):
     """A group or shared drive sharing of a document."""
 
+    members_as_of = MillisecondDateTimeField(read_only=True)
+
     class Meta:
         model = Grant
         fields = [
@@ -36,6 +53,10 @@ class GrantSerializer(serializers.ModelSerializer):
             "name",
             "member_count",
             "role",
+            "organization_id",
+            "external_id",
+            "owner_instance",
+            "members_as_of",
             "created_at",
             "updated_at",
         ]

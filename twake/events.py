@@ -191,6 +191,9 @@ def grant_data(grant):
         "source_id": grant.source_id,
         "name": grant.name,
         "role": grant.role,
+        "organization_id": grant.organization_id,
+        "external_id": grant.external_id,
+        "owner_instance": grant.owner_instance,
     }
 
 
