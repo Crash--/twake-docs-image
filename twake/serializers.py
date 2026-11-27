@@ -117,6 +117,15 @@ class UserSettingsSerializer(serializers.Serializer):
     timezone = serializers.CharField(max_length=64, required=False, allow_null=True)
 
 
+class EntryPointsSerializer(serializers.Serializer):
+    """`POST /twake/entry-points/`: up to a batch of people, a tree or not."""
+
+    people = serializers.ListField(
+        child=serializers.CharField(max_length=255), min_length=1, max_length=200
+    )
+    within = serializers.UUIDField(required=False)
+
+
 class ManagedAccessItemSerializer(serializers.Serializer):
     """One member a grant gives access to."""
 

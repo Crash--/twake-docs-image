@@ -36,6 +36,7 @@ urlpatterns = [
     # Side service, server-to-server token, not exposed by the front proxy
     path("twake/users/", views.ensure_user, name="twake-admin-users"),
     path("twake/users/settings/", views.user_settings, name="twake-admin-settings"),
+    path("twake/entry-points/", views.entry_points, name="twake-admin-entry-points"),
     path(
         "twake/documents/<uuid:document_id>/managed-accesses/",
         views.managed_accesses,

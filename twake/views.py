@@ -30,6 +30,8 @@ from core.choices import PRIVILEGED_ROLES, RoleChoices
 from core.utils.treebeard import create_tree_node_with_retry
 
 from . import events, serializers
+from .entry_points import drives_of, find_people
+from .entry_points import entry_points as compute_entry_points
 from .models import Grant, ManagedAccess, WorkplaceUser
 from .oidc import WORKPLACE_FQDN_SESSION_KEY
 
@@ -339,6 +341,46 @@ def ensure_user(request):
         {"id": str(user.pk), "sub": user.sub, "created": created},
         status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
     )
+
+
+@admin_route(["POST"])
+def entry_points(request):
+    """The entry points of a batch of people, what `GET /documents/` of Docs
+    gives each of them, in a few queries instead of one request per person."""
+    serializer = serializers.EntryPointsSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    within = None
+    if "within" in serializer.validated_data:
+        within = get_object_or_404(
+            models.Document, pk=serializer.validated_data["within"]
+        )
+    people = find_people(serializer.validated_data["people"])
+    users = list({user.pk: user for user in people.values()}.values())
+    found = compute_entry_points(users, within)
+    drives = drives_of({doc.pk for entries, _ in found.values() for doc, *_ in entries})
+    workplace = dict(
+        WorkplaceUser.objects.filter(user__in=users).values_list(
+            "user_id", "workplace_fqdn"
+        )
+    )
+    results = {}
+    for identifier, user in people.items():
+        entries, others = found[user.pk]
+        results[identifier] = {
+            "workplace_fqdn": workplace.get(user.pk, ""),
+            "entry_points": [
+                {
+                    "id": str(document.pk),
+                    "title": document.title or "",
+                    "role": role,
+                    "deleted": deleted,
+                    "drives": drives.get(document.pk, []),
+                }
+                for document, role, deleted in entries
+            ],
+            "others": others,
+        }
+    return Response({"results": results})
 
 
 @admin_route(["PUT"])
