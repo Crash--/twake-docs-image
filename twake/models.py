@@ -145,6 +145,29 @@ class GrantMember(models.Model):
         return f"{self.email} in {self.grant_id}{' (removed)' if self.removed else ''}"
 
 
+class DocumentGestures(models.Model):
+    """
+    The date of the last gesture applied to a document, by kind, to refuse an
+    older one that arrives late, and the key of the Drive file it was copied
+    from, to not copy it twice.
+    """
+
+    document = models.OneToOneField(
+        Document, on_delete=models.CASCADE, related_name="twake_gestures"
+    )
+    title_at = models.DateTimeField(null=True, blank=True)
+    trash_at = models.DateTimeField(null=True, blank=True)
+    moved_at = models.DateTimeField(null=True, blank=True)
+    # `instance:fileId` of the file copied in Drive, set on the copy
+    copied_from = models.CharField(max_length=255, unique=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "twake_document_gestures"
+
+    def __str__(self):
+        return f"gestures of {self.document_id}"
+
+
 class ManagedAccess(models.Model):
     """
     An access the side service posed because of grants, with the direct role

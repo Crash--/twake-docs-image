@@ -4,10 +4,11 @@ import threading
 
 from django.db.models import signals
 from django.dispatch import receiver
+from django.utils import timezone
 
 from core import models
 
-from .models import Grant, ManagedAccess, Outbox, workplace_fqdn_of
+from .models import DocumentGestures, Grant, ManagedAccess, Outbox, workplace_fqdn_of
 
 SOURCE = "twake://docs"
 
@@ -84,6 +85,36 @@ def document_data(document):
 def emit_document(event_type, document, **extra):
     """Write a document event."""
     return emit(event_type, {**document_data(document), **extra})
+
+
+@receiver(signals.pre_save, sender=models.Document)
+def document_saving(sender, instance, update_fields, **kwargs):
+    # pylint: disable=unused-argument
+    """A title or a trash state that changes in Docs is a gesture dated now, so
+    that an older one from Drive arriving late does not undo it."""
+    if instance._state.adding:  # pylint: disable=protected-access
+        return
+    fields = set(update_fields) if update_fields is not None else None
+    watched = {"title", "deleted_at"}
+    if fields is not None and not watched & fields:
+        return
+    before = (
+        models.Document.objects.filter(pk=instance.pk)
+        .values("title", "deleted_at")
+        .first()
+    )
+    if before is None:
+        return
+    now = timezone.now()
+    dates = {}
+    if before["title"] != instance.title and (fields is None or "title" in fields):
+        dates["title_at"] = now
+    if before["deleted_at"] != instance.deleted_at and (
+        fields is None or "deleted_at" in fields
+    ):
+        dates["trash_at"] = now
+    if dates:
+        DocumentGestures.objects.update_or_create(document=instance, defaults=dates)
 
 
 @receiver(signals.post_save, sender=models.Document)

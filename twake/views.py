@@ -33,7 +33,13 @@ from core.utils.treebeard import create_tree_node_with_retry
 from . import events, serializers
 from .entry_points import drives_of, find_people
 from .entry_points import entry_points as compute_entry_points
-from .models import Grant, GrantMember, ManagedAccess, WorkplaceUser
+from .models import (
+    DocumentGestures,
+    Grant,
+    GrantMember,
+    ManagedAccess,
+    WorkplaceUser,
+)
 from .oidc import WORKPLACE_FQDN_SESSION_KEY
 
 
@@ -383,6 +389,61 @@ def entry_points(request):
             "others": others,
         }
     return Response({"results": results})
+
+
+GESTURE_DATES = {"title": "title_at", "trash": "trash_at", "move": "moved_at"}
+
+
+@admin_route(["POST"])
+def gestures(request, document_id):
+    """Refuse a gesture of Drive older than the last one applied to the
+    document, and record its date once done. The side service asks without
+    `record`, does the gesture, then asks again with `record`. The second call
+    assigns the date without the check: the gesture done through Docs has just
+    dated the field to now, which would refuse its own record."""
+    serializer = serializers.GestureSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+    document = get_object_or_404(models.Document, pk=document_id)
+    refused = Response({"applied": False}, status=status.HTTP_409_CONFLICT)
+    with transaction.atomic():
+        kept, _ = DocumentGestures.objects.select_for_update().get_or_create(
+            document=document
+        )
+        if data["field"] == "copied_from":
+            taken = (
+                DocumentGestures.objects.filter(copied_from=data["key"])
+                .exclude(pk=kept.pk)
+                .exists()
+            )
+            if taken:
+                return refused
+            if data["record"]:
+                kept.copied_from = data["key"]
+                kept.save(update_fields=["copied_from"])
+            return Response({"applied": True})
+        column = GESTURE_DATES[data["field"]]
+        if data["record"]:
+            setattr(kept, column, data["as_of"])
+            kept.save(update_fields=[column])
+            return Response({"applied": True})
+        date = getattr(kept, column)
+        if date and data["as_of"] <= date:
+            return refused
+    return Response({"applied": True})
+
+
+@admin_route(["POST"])
+def copies(request):
+    """The copy made for a file copied in Drive, by its key."""
+    serializer = serializers.CopyKeySerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    copy = DocumentGestures.objects.filter(
+        copied_from=serializer.validated_data["key"]
+    ).first()
+    if copy is None:
+        return Response({}, status=status.HTTP_404_NOT_FOUND)
+    return Response({"id": str(copy.document_id)})
 
 
 @admin_route(["PUT"])

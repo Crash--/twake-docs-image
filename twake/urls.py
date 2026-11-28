@@ -43,6 +43,12 @@ urlpatterns = [
         name="twake-admin-document",
     ),
     path(
+        "twake/documents/<uuid:document_id>/gestures/",
+        views.gestures,
+        name="twake-admin-gestures",
+    ),
+    path("twake/copies/", views.copies, name="twake-admin-copies"),
+    path(
         "twake/documents/<uuid:document_id>/managed-accesses/",
         views.managed_accesses,
         name="twake-admin-managed-accesses",

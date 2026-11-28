@@ -168,3 +168,25 @@ class ManagedAccessesSerializer(serializers.Serializer):
     """`PUT /twake/documents/{id}/managed-accesses/`: the wanted state."""
 
     accesses = ManagedAccessItemSerializer(many=True)
+
+
+class GestureSerializer(serializers.Serializer):
+    """`POST /twake/documents/{id}/gestures/`: check, and optionally record, the
+    date of a gesture done in Drive, or the key of a copy."""
+
+    field = serializers.ChoiceField(choices=["title", "trash", "move", "copied_from"])
+    as_of = serializers.DateTimeField(required=False)
+    key = serializers.CharField(max_length=255, required=False)
+    record = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        needed = "key" if attrs["field"] == "copied_from" else "as_of"
+        if needed not in attrs:
+            raise serializers.ValidationError({needed: ["This field is required."]})
+        return attrs
+
+
+class CopyKeySerializer(serializers.Serializer):
+    """`POST /twake/copies/`: the key of a file copied in Drive."""
+
+    key = serializers.CharField(max_length=255)
