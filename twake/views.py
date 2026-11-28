@@ -31,7 +31,7 @@ from core.choices import PRIVILEGED_ROLES, RoleChoices
 from core.utils.treebeard import create_tree_node_with_retry
 
 from . import events, serializers
-from .entry_points import drives_of, find_people
+from .entry_points import drive_members_of, drives_of, find_people
 from .entry_points import entry_points as compute_entry_points
 from .models import (
     DocumentGestures,
@@ -365,7 +365,9 @@ def entry_points(request):
     people = find_people(serializer.validated_data["people"])
     users = list({user.pk: user for user in people.values()}.values())
     found = compute_entry_points(users, within)
-    drives = drives_of({doc.pk for entries, _ in found.values() for doc, *_ in entries})
+    document_ids = {doc.pk for entries, _ in found.values() for doc, *_ in entries}
+    drives = drives_of(document_ids)
+    member_emails, member_instances = drive_members_of(document_ids)
     workplace = dict(
         WorkplaceUser.objects.filter(user__in=users).values_list(
             "user_id", "workplace_fqdn"
@@ -374,8 +376,10 @@ def entry_points(request):
     results = {}
     for identifier, user in people.items():
         entries, others = found[user.pk]
+        email = (user.email or "").lower()
+        fqdn = workplace.get(user.pk, "")
         results[identifier] = {
-            "workplace_fqdn": workplace.get(user.pk, ""),
+            "workplace_fqdn": fqdn,
             "entry_points": [
                 {
                     "id": str(document.pk),
@@ -383,6 +387,8 @@ def entry_points(request):
                     "role": role,
                     "deleted": deleted,
                     "drives": drives.get(document.pk, []),
+                    "in_drive": email in member_emails[document.pk]
+                    or bool(fqdn and fqdn in member_instances[document.pk]),
                 }
                 for document, role, deleted in entries
             ],

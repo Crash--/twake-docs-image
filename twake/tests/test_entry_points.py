@@ -4,7 +4,7 @@ import pytest
 
 from core import factories, models
 
-from twake.models import Grant, WorkplaceUser
+from twake.models import Grant, GrantMember, WorkplaceUser
 
 pytestmark = pytest.mark.django_db
 
@@ -58,6 +58,7 @@ def test_entry_points_within_a_tree_match_the_contract(admin_client, plan):
                     "role": "reader",
                     "deleted": False,
                     "drives": [],
+                    "in_drive": False,
                 }
             ],
             "others": [SUBPAGE],
@@ -165,6 +166,54 @@ def test_drives_carry_the_grants_of_the_shared_drives(admin_client, plan):
     ]
 
 
+def drive_grant(document, **member):
+    grant = Grant.objects.create(
+        document=document,
+        source_kind="shared_drive",
+        source_id="drive-1",
+        owner_instance="acme.example.net",
+        role="editor",
+    )
+    GrantMember.objects.create(
+        grant=grant, at="2026-11-28T10:00:00Z", **{"email": "x@example.com", **member}
+    )
+    return grant
+
+
+def in_drive(admin_client, person="bob"):
+    entry = ask(admin_client, people=[person])[person]["entry_points"][0]
+    return entry["in_drive"]
+
+
+def test_in_drive_by_email_in_any_case(admin_client, plan):
+    drive_grant(plan, email="bob@example.com")
+    assert in_drive(admin_client) is True
+
+
+def test_in_drive_by_instance(admin_client, plan):
+    drive_grant(plan, email="other@example.com", workplace_fqdn="bob.example.net")
+    assert in_drive(admin_client) is True
+
+
+def test_not_in_drive_when_removed_or_not_a_member(admin_client, plan):
+    drive_grant(plan, email="bob@example.com", workplace_fqdn="bob.example.net", removed=True)
+    assert in_drive(admin_client) is False
+
+
+def test_a_group_grant_is_not_a_drive(admin_client, plan):
+    grant = Grant.objects.create(
+        document=plan, source_kind="group", source_id="g", role="reader"
+    )
+    GrantMember.objects.create(grant=grant, email="bob@example.com", at="2026-11-28T10:00:00Z")
+    assert in_drive(admin_client) is False
+
+
+def test_an_empty_instance_does_not_match_an_empty_instance(admin_client, plan):
+    WorkplaceUser.objects.filter(user__sub="bob").update(workplace_fqdn="")
+    drive_grant(plan, email="other@example.com", workplace_fqdn="")
+    assert in_drive(admin_client) is False
+
+
 def test_at_most_200_people_and_the_service_token(admin_client, session_client):
     """The size of a batch, and the admin authentication."""
     too_many = [f"p{i}" for i in range(201)]
@@ -186,7 +235,7 @@ def test_a_batch_does_not_cost_one_query_per_person(
     others = [factories.UserFactory(sub=f"u{i}") for i in range(20)]
     for user in others:
         models.DocumentAccess.objects.create(document=plan, user=user, role="reader")
-    with django_assert_max_num_queries(15):
+    with django_assert_max_num_queries(16):
         results = ask(
             admin_client, people=[u.sub for u in others] + ["bob"], within=PLAN
         )

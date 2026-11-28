@@ -9,7 +9,7 @@ from core import models
 from core.api.utils import filter_root_paths
 from core.choices import RoleChoices
 
-from .models import Grant, SourceKind
+from .models import Grant, GrantMember, SourceKind
 
 
 def find_people(identifiers):
@@ -141,3 +141,19 @@ def drives_of(document_ids):
             {"source_id": grant.source_id, "owner_instance": grant.owner_instance}
         )
     return drives
+
+
+def drive_members_of(document_ids):
+    """The people each document is shared with through a shared drive, as the
+    emails and the instances of the members that were not removed."""
+    emails = defaultdict(set)
+    instances = defaultdict(set)
+    for document_id, email, fqdn in GrantMember.objects.filter(
+        grant__document_id__in=document_ids,
+        grant__source_kind=SourceKind.SHARED_DRIVE,
+        removed=False,
+    ).values_list("grant__document_id", "email", "workplace_fqdn"):
+        emails[document_id].add(email)
+        if fqdn:
+            instances[document_id].add(fqdn)
+    return emails, instances
